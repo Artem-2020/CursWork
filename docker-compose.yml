@@ -1,0 +1,94 @@
+name: server-failure-prediction
+
+services:
+  agent:
+    container_name: sfp-agent
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      LISTEN_ADDR: ":9100"
+      SCRAPE_INTERVAL: "15s"
+      DISK_PATH: "/"
+      LOG_LEVEL: "info"
+    ports:
+      - "9100:9100"
+    networks:
+      - monitoring
+
+  prometheus:
+    container_name: sfp-prometheus
+    image: prom/prometheus:v2.52.0
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+    volumes:
+      - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - agent
+    networks:
+      - monitoring
+
+  ml_service:
+    container_name: sfp-ml-service
+    build:
+      context: ./ml_service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PROMETHEUS_URL: "http://prometheus:9090"
+      LOOKBACK_SECONDS: "3600"
+      WORKER_INTERVAL_SECONDS: "60"
+      MIN_DATA_POINTS: "10"
+      SIGMA_THRESHOLD: "3.0"
+      IFOREST_CONTAMINATION: "0.05"
+      ALERT_COOLDOWN_MINUTES: "15"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
+      LOG_LEVEL: "INFO"
+    ports:
+      - "8000:8000"
+    depends_on:
+      - prometheus
+      - agent
+    networks:
+      - monitoring
+
+  grafana:
+    container_name: sfp-grafana
+    image: grafana/grafana:10.4.2
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-admin}"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_USERS_DEFAULT_THEME: "dark"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: "/var/lib/grafana/dashboards/server-agent.json"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - monitoring
+
+networks:
+  monitoring:
+    name: sfp-monitoring
+    driver: bridge
+
+volumes:
+  prometheus_data:
+    name: sfp-prometheus-data
+  grafana_data:
+    name: sfp-grafana-data
